@@ -1,5 +1,22 @@
 import Foundation
 
+/// A single object the on-device model detected in the image.
+///
+/// `bbox` is normalized to `[0, 1]` in `[x, y, width, height]` form relative to
+/// the original image dimensions. It stays on-device — only `category` and
+/// `score` are reported to the AntiNude backend.
+public struct Detection: Sendable, Equatable {
+    public let category: String
+    public let score: Double
+    public let bbox: [Double]?
+
+    public init(category: String, score: Double, bbox: [Double]? = nil) {
+        self.category = category
+        self.score = score
+        self.bbox = bbox
+    }
+}
+
 public struct ScanResult: Sendable, Equatable {
     public let verdict: String
     public let topCategory: String?
@@ -7,6 +24,10 @@ public struct ScanResult: Sendable, Equatable {
     public let latencyMs: Int
     public let modelVersion: String
     public let requestId: String?
+    /// Detailed per-object detections from the on-device model. `nil` for
+    /// classifier-only models; non-empty array for detector models such as
+    /// NudeNet.
+    public let detections: [Detection]?
 }
 
 public struct ANError: Error, CustomStringConvertible {
@@ -22,16 +43,16 @@ public struct ANError: Error, CustomStringConvertible {
 /// resulting verdict (and minimal metadata) to the AntiNude backend so the
 /// developer can see usage in the dashboard.
 ///
-/// v0.2.x ships a mock on-device model — verdicts are randomized. A real
-/// CoreML model will replace `runLocalModel` in a future version without
-/// changing the public API.
+/// v0.3.x ships a mock on-device model — verdicts and detections are
+/// randomized. A real CoreML/ONNX model will replace `runLocalModel` in a
+/// future version without changing the public API.
 public final class ANClient {
 
     private let apiKey: String
     private let baseURL: URL
     private let reportToServer: Bool
     private let session: URLSession
-    private let modelVersion = "mock-v0.2.0"
+    private let modelVersion = "mock-v0.3.0"
 
     public init(
         apiKey: String,
@@ -60,7 +81,8 @@ public final class ANClient {
             topScore: local.topScore,
             latencyMs: latencyMs,
             modelVersion: modelVersion,
-            requestId: nil
+            requestId: nil,
+            detections: local.detections
         )
 
         guard reportToServer else { return result }
@@ -72,7 +94,8 @@ public final class ANClient {
             topScore: result.topScore,
             latencyMs: result.latencyMs,
             modelVersion: result.modelVersion,
-            requestId: requestId
+            requestId: requestId,
+            detections: result.detections
         )
     }
 
@@ -82,22 +105,52 @@ public final class ANClient {
         let verdict: String
         let topCategory: String?
         let topScore: Double?
+        let detections: [Detection]?
     }
+
+    private static let mockUnsafeClasses = [
+        "FEMALE_BREAST_EXPOSED",
+        "FEMALE_GENITALIA_EXPOSED",
+        "MALE_GENITALIA_EXPOSED",
+        "BUTTOCKS_EXPOSED",
+    ]
+    private static let mockSafeClasses = [
+        "FEMALE_BREAST_COVERED",
+        "FACE_FEMALE",
+        "FACE_MALE",
+        "FEET_EXPOSED",
+    ]
 
     private func runLocalModel(_ data: Data) -> LocalOutput {
         // Pretend the model takes 30–80 ms to run.
         Thread.sleep(forTimeInterval: Double.random(in: 0.03...0.08))
         let unsafe = Double.random(in: 0...1) < 0.15
-        let unsafeCats = ["nudity", "suggestive", "sexual_violence", "gore"]
-        let safeCats = ["nudity", "suggestive"]
-        let category = (unsafe ? unsafeCats : safeCats).randomElement()
-        let score = unsafe
-            ? 0.70 + Double.random(in: 0...0.30)
-            : Double.random(in: 0...0.30)
+
+        let count = Int.random(in: 1...3)
+        let pool = unsafe ? Self.mockUnsafeClasses : Self.mockSafeClasses
+        var detections: [Detection] = []
+        for _ in 0..<count {
+            let cat = pool.randomElement()!
+            let score = unsafe
+                ? 0.70 + Double.random(in: 0...0.30)
+                : Double.random(in: 0...0.30)
+            let x = Double.random(in: 0...0.7)
+            let y = Double.random(in: 0...0.7)
+            let w = Double.random(in: 0.1...min(0.3, 1 - x))
+            let h = Double.random(in: 0.1...min(0.3, 1 - y))
+            detections.append(Detection(
+                category: cat,
+                score: (score * 10000).rounded() / 10000,
+                bbox: [x, y, w, h].map { ($0 * 10000).rounded() / 10000 }
+            ))
+        }
+        let top = detections.max(by: { $0.score < $1.score })
+
         return LocalOutput(
             verdict: unsafe ? "unsafe" : "safe",
-            topCategory: category,
-            topScore: (score * 10000).rounded() / 10000
+            topCategory: top?.category,
+            topScore: top?.score,
+            detections: detections
         )
     }
 
@@ -111,6 +164,10 @@ public final class ANClient {
         ]
         if let c = r.topCategory { payload["top_category"] = c }
         if let s = r.topScore { payload["top_score"] = s }
+        if let ds = r.detections, !ds.isEmpty {
+            // bbox stays on-device; telemetry only ships category + score.
+            payload["detections"] = ds.map { ["category": $0.category, "score": $0.score] }
+        }
         let body = try JSONSerialization.data(withJSONObject: payload)
 
         var req = URLRequest(url: baseURL.appendingPathComponent("/api/v1/scan"))
@@ -119,7 +176,7 @@ public final class ANClient {
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("an-sdk-ios/0.2.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        req.setValue("an-sdk-ios/0.3.0 (iOS)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
 
         let (data, response) = try await session.data(for: req)

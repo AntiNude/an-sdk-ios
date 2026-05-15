@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name             = 'ANSdk'
-  s.version          = '0.2.0'
-  s.summary          = 'AntiNude SDK for iOS — on-device NSFW classifier (mock in v0.2).'
+  s.version          = '0.3.0'
+  s.summary          = 'AntiNude SDK for iOS — on-device NSFW detector (mock in v0.3).'
   s.description      = <<-DESC
     AntiNude SDK runs NSFW classification fully on-device. Image bytes never
     leave the phone; only the resulting verdict is reported to the AntiNude
