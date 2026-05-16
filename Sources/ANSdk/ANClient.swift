@@ -30,10 +30,68 @@ public struct ScanResult: Sendable, Equatable {
     public let detections: [Detection]?
 }
 
-public struct ANError: Error, CustomStringConvertible {
+/// Stable error codes returned by the SDK.
+///
+/// Server-side codes mirror the `error` field in `/api/v1/scan` responses.
+/// Local codes (those starting with `local_*` semantics) are raised before
+/// any network call — e.g. when the supplied image bytes are invalid.
+///
+/// Adding a new case is non-breaking; renaming or removing one is breaking.
+/// `unknown` is the fallback for codes a newer server may introduce.
+public enum ANErrorCode: String, Sendable, Equatable {
+    // --- Server-reported ---
+    case unauthorized
+    case keyRevoked = "key_revoked"
+    case featureNotAllowed = "feature_not_allowed"
+    case quotaExceeded = "quota_exceeded"
+    case rateLimited = "rate_limited"
+    case invalidBody = "invalid_body"
+    case expectedApplicationJson = "expected_application_json"
+    case invalidVerdict = "invalid_verdict"
+    case invalidDetections = "invalid_detections"
+    case serviceUnavailable = "service_unavailable"
+    case internalError = "internal_error"
+
+    // --- Local-only (no network involved) ---
+    case emptyImage = "empty_image"
+    case unsupportedFormat = "unsupported_format"
+    case imageTooLarge = "image_too_large"
+    case modelLoadFailed = "model_load_failed"
+    case inferenceFailed = "inference_failed"
+    case network = "network"
+
+    case unknown = "unknown"
+
+    init(rawOrUnknown: String?) {
+        self = ANErrorCode(rawValue: rawOrUnknown ?? "") ?? .unknown
+    }
+}
+
+public struct ANError: Error, CustomStringConvertible, Sendable {
+    public let code: ANErrorCode
+    /// HTTP status code if the error came from the server, `0` for local errors.
     public let statusCode: Int
     public let message: String
-    public var description: String { "AN SDK error \(statusCode): \(message)" }
+
+    public init(code: ANErrorCode, statusCode: Int = 0, message: String) {
+        self.code = code
+        self.statusCode = statusCode
+        self.message = message
+    }
+
+    /// `true` if the caller can reasonably retry the same request later.
+    public var isRetryable: Bool {
+        switch code {
+        case .rateLimited, .serviceUnavailable, .network: return true
+        default: return false
+        }
+    }
+
+    public var description: String {
+        statusCode == 0
+            ? "AN SDK error \(code.rawValue): \(message)"
+            : "AN SDK error \(code.rawValue) (HTTP \(statusCode)): \(message)"
+    }
 }
 
 /// AntiNude SDK client.
@@ -69,7 +127,7 @@ public final class ANClient {
     /// Scan an image on device and (by default) report the verdict.
     public func scanImage(_ data: Data) async throws -> ScanResult {
         guard !data.isEmpty else {
-            throw ANError(statusCode: 0, message: "empty image")
+            throw ANError(code: .emptyImage, message: "empty image")
         }
 
         let started = Date()
@@ -179,15 +237,28 @@ public final class ANClient {
         req.setValue("an-sdk-ios/0.3.0 (iOS)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
 
-        let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw ANError(statusCode: 0, message: "no_http_response")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch {
+            throw ANError(code: .network, message: error.localizedDescription)
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw ANError(statusCode: http.statusCode, message: msg)
+        guard let http = response as? HTTPURLResponse else {
+            throw ANError(code: .network, message: "no_http_response")
         }
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard (200..<300).contains(http.statusCode) else {
+            let serverCode = json?["error"] as? String
+            let serverMsg = (json?["message"] as? String)
+                ?? String(data: data, encoding: .utf8)
+                ?? "HTTP \(http.statusCode)"
+            throw ANError(
+                code: ANErrorCode(rawOrUnknown: serverCode),
+                statusCode: http.statusCode,
+                message: serverMsg
+            )
+        }
         return json?["request_id"] as? String
     }
 }
