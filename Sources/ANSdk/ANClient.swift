@@ -96,32 +96,52 @@ public struct ANError: Error, CustomStringConvertible, Sendable {
 
 /// AntiNude SDK client.
 ///
-/// Privacy model: the NSFW classifier runs **fully on-device**. No image bytes
+/// Privacy model: the NSFW detector runs **fully on-device**. No image bytes
 /// ever leave the device. After local inference, the SDK reports only the
 /// resulting verdict (and minimal metadata) to the AntiNude backend so the
 /// developer can see usage in the dashboard.
 ///
-/// v0.3.x ships a mock on-device model — verdicts and detections are
-/// randomized. A real CoreML/ONNX model will replace `runLocalModel` in a
-/// future version without changing the public API.
+/// v0.3 ships NudeNet 320n bundled inside the SDK; the model file is also
+/// addressable as `Bundle.module.url(forResource: "320n", withExtension:
+/// "onnx")` if you want to manage it yourself. Init is throwing because
+/// model load can fail (bundle corrupted, unknown ORT version).
 public final class ANClient {
 
     private let apiKey: String
     private let baseURL: URL
     private let reportToServer: Bool
     private let session: URLSession
-    private let modelVersion = "mock-v0.3.0"
+    private let detector: Detector
+    private let modelVersion: String
 
+    /// Designated initializer.
+    /// - Parameter modelURL: path to a NudeNet 320n `.onnx`. Defaults to the
+    ///   model bundled with the SDK. Pass an explicit URL when integrating a
+    ///   hot-updated or alternative model.
     public init(
         apiKey: String,
+        modelURL: URL? = nil,
         baseURL: URL = URL(string: "https://antinude.site")!,
         reportToServer: Bool = true,
         session: URLSession = .shared
-    ) {
+    ) throws {
+        let resolvedModelURL: URL
+        if let modelURL {
+            resolvedModelURL = modelURL
+        } else if let bundled = Bundle.module.url(forResource: "320n", withExtension: "onnx") {
+            resolvedModelURL = bundled
+        } else {
+            throw ANError(
+                code: .modelLoadFailed,
+                message: "SDK bundle is missing 320n.onnx; pass an explicit modelURL"
+            )
+        }
         self.apiKey = apiKey
         self.baseURL = baseURL
         self.reportToServer = reportToServer
         self.session = session
+        self.detector = try Detector(modelURL: resolvedModelURL)
+        self.modelVersion = Detector.modelVersion
     }
 
     /// Scan an image on device and (by default) report the verdict.
@@ -131,16 +151,18 @@ public final class ANClient {
         }
 
         let started = Date()
-        let local = runLocalModel(data)
+        let detections = try detector.detect(imageData: data)
+        let (verdict, top) = Detector.computeVerdict(detections: detections)
         let latencyMs = Int(Date().timeIntervalSince(started) * 1000)
+
         let result = ScanResult(
-            verdict: local.verdict,
-            topCategory: local.topCategory,
-            topScore: local.topScore,
+            verdict: verdict,
+            topCategory: top?.category,
+            topScore: top?.score,
             latencyMs: latencyMs,
             modelVersion: modelVersion,
             requestId: nil,
-            detections: local.detections
+            detections: detections
         )
 
         guard reportToServer else { return result }
@@ -154,61 +176,6 @@ public final class ANClient {
             modelVersion: result.modelVersion,
             requestId: requestId,
             detections: result.detections
-        )
-    }
-
-    // MARK: - On-device inference (mock)
-
-    private struct LocalOutput {
-        let verdict: String
-        let topCategory: String?
-        let topScore: Double?
-        let detections: [Detection]?
-    }
-
-    private static let mockUnsafeClasses = [
-        "FEMALE_BREAST_EXPOSED",
-        "FEMALE_GENITALIA_EXPOSED",
-        "MALE_GENITALIA_EXPOSED",
-        "BUTTOCKS_EXPOSED",
-    ]
-    private static let mockSafeClasses = [
-        "FEMALE_BREAST_COVERED",
-        "FACE_FEMALE",
-        "FACE_MALE",
-        "FEET_EXPOSED",
-    ]
-
-    private func runLocalModel(_ data: Data) -> LocalOutput {
-        // Pretend the model takes 30–80 ms to run.
-        Thread.sleep(forTimeInterval: Double.random(in: 0.03...0.08))
-        let unsafe = Double.random(in: 0...1) < 0.15
-
-        let count = Int.random(in: 1...3)
-        let pool = unsafe ? Self.mockUnsafeClasses : Self.mockSafeClasses
-        var detections: [Detection] = []
-        for _ in 0..<count {
-            let cat = pool.randomElement()!
-            let score = unsafe
-                ? 0.70 + Double.random(in: 0...0.30)
-                : Double.random(in: 0...0.30)
-            let x = Double.random(in: 0...0.7)
-            let y = Double.random(in: 0...0.7)
-            let w = Double.random(in: 0.1...min(0.3, 1 - x))
-            let h = Double.random(in: 0.1...min(0.3, 1 - y))
-            detections.append(Detection(
-                category: cat,
-                score: (score * 10000).rounded() / 10000,
-                bbox: [x, y, w, h].map { ($0 * 10000).rounded() / 10000 }
-            ))
-        }
-        let top = detections.max(by: { $0.score < $1.score })
-
-        return LocalOutput(
-            verdict: unsafe ? "unsafe" : "safe",
-            topCategory: top?.category,
-            topScore: top?.score,
-            detections: detections
         )
     }
 
