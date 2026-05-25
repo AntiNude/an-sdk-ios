@@ -101,11 +101,14 @@ public struct ANError: Error, CustomStringConvertible, Sendable {
 /// resulting verdict (and minimal metadata) to the AntiNude backend so the
 /// developer can see usage in the dashboard.
 ///
-/// v0.3 ships NudeNet 320n bundled inside the SDK; the model file is also
+/// v0.9 ships NudeNet 320n bundled inside the SDK; the model file is also
 /// addressable as `Bundle.module.url(forResource: "320n", withExtension:
 /// "onnx")` if you want to manage it yourself. Init is throwing because
 /// model load can fail (bundle corrupted, unknown ORT version).
 public final class ANClient {
+
+    /// Bundled SDK release. Sent in the `User-Agent` of every telemetry call.
+    public static let sdkVersion = "0.9.0"
 
     private let apiKey: String
     private let baseURL: URL
@@ -201,7 +204,12 @@ public final class ANClient {
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("an-sdk-ios/0.3.0 (iOS)", forHTTPHeaderField: "User-Agent")
+        req.setValue("an-sdk-ios/\(ANClient.sdkVersion) (iOS)", forHTTPHeaderField: "User-Agent")
+        if let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty {
+            // Lets the backend enforce bundle-bound API keys. Sandbox keys
+            // and unrestricted live keys ignore this header.
+            req.setValue(bundleId, forHTTPHeaderField: "X-AntiNude-Bundle")
+        }
         req.timeoutInterval = 15
 
         let data: Data

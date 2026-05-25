@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    AntiNude SDK Privacy Manifest
+
+    Covers the SDK's own data collection. The host app is responsible for
+    its top-level PrivacyInfo.xcprivacy declaring what it sends to the SDK.
+
+    What the SDK collects:
+      - Inference verdict ("safe" / "unsafe") and per-class detection scores
+        produced on-device.
+      - Inference latency and the on-device model version.
+      - The request IP (observed server-side, not read from the device).
+
+    What the SDK does NOT collect:
+      - Image bytes, thumbnails, or bounding-box coordinates.
+      - Device identifiers, IDFA, location, contacts.
+      - User content beyond what the developer passes in.
+  -->
+  <key>NSPrivacyTracking</key>
+  <false/>
+
+  <key>NSPrivacyCollectedDataTypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeProductInteraction</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+        <string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+      </array>
+    </dict>
+    <dict>
+      <key>NSPrivacyCollectedDataType</key>
+      <string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+      <key>NSPrivacyCollectedDataTypeLinked</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypeTracking</key>
+      <false/>
+      <key>NSPrivacyCollectedDataTypePurposes</key>
+      <array>
+        <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+      </array>
+    </dict>
+  </array>
+
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array/>
+
+  <key>NSPrivacyTrackingDomains</key>
+  <array/>
+</dict>
+</plist>

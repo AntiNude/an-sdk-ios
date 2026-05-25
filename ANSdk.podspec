@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'ANSdk'
-  s.version          = '0.3.0'
+  s.version          = '0.9.0'
   s.summary          = 'AntiNude SDK for iOS — on-device NSFW detector (NudeNet 320n).'
   s.description      = <<-DESC
     AntiNude SDK runs NSFW detection fully on-device using NudeNet 320n via
@@ -16,6 +16,9 @@ Pod::Spec.new do |s|
   s.swift_versions   = ['5.9']
   s.source_files     = 'Sources/ANSdk/**/*.swift'
   s.resources        = 'Sources/ANSdk/Resources/*.onnx'
+  s.resource_bundles = {
+    'ANSdk' => ['Sources/ANSdk/Resources/PrivacyInfo.xcprivacy']
+  }
   s.frameworks       = 'Foundation', 'CoreGraphics', 'ImageIO', 'Accelerate'
   s.dependency 'onnxruntime-objc', '1.24.2'
 end
